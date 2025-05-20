@@ -1,0 +1,302 @@
+# Python Package Development Guidelines
+
+## 1. Code Organization and Structure
+
+### 1.1 Package Layout
+```
+package_name/
+├── src/
+│   └── package_name/
+│       ├── __init__.py
+│       ├── core.py
+│       ├── models.py
+│       ├── exceptions.py
+│       └── utils.py
+└── tests/
+    ├── __init__.py
+    ├── test_core.py
+    └── test_models.py
+```
+
+### 1.2 Module Organization
+- Each module should have a clear, single responsibility
+- Core functionality should be separated from utilities
+- Exceptions should be centralized in `exceptions.py`
+- Common utilities should be in `utils.py`
+
+## 2. Type Hints and Annotations
+
+### 2.1 Import Style
+```python
+from typing import Union, List, Dict, Optional, Any, TypedDict, Protocol, TypeVar
+```
+
+### 2.2 Type Hinting Rules
+- Use explicit type hints for all function parameters and return values
+- Use `Optional[Type]` for parameters that can be None
+- Use `Union[Type1, Type2]` for parameters that can be multiple types
+- Use `TypedDict` for dictionary structures with known keys
+- Use `Protocol` for structural typing
+- Use `TypeVar` for generic types
+- Use `Any` sparingly and only when type cannot be determined
+
+Example:
+```python
+T = TypeVar('T')
+
+def process_data(
+    data: List[T],
+    transform: Optional[Callable[[T], T]] = None,
+    batch_size: Optional[int] = None
+) -> Generator[List[T], None, None]:
+```
+
+## 3. Error Handling and Exceptions
+
+### 3.1 Exception Hierarchy
+- Create a base exception class for the package
+- Create specific exception classes for different error types
+- Use inheritance to organize related exceptions
+
+Example:
+```python
+class PackageError(Exception):
+    """Base exception for all package related errors."""
+    pass
+
+class ValidationError(PackageError):
+    """Exception raised for validation related errors."""
+    pass
+```
+
+### 3.2 Error Handling Patterns
+- Use specific exception types for different error scenarios
+- Include descriptive error messages
+- Log errors before raising exceptions
+- Use context managers for resource cleanup
+- Implement proper error recovery mechanisms
+
+## 4. Documentation and Docstrings
+
+### 4.1 Docstring Format
+- Use Google-style docstrings
+- Include Args, Returns, Raises sections
+- Document all parameters and return values
+- Include examples where helpful
+- Document type hints
+
+Example:
+```python
+def process_data(data: List[T], **kwargs) -> Result:
+    """Process a list of data items with optional transformations.
+    
+    Args:
+        data: List of items to process
+        **kwargs: Additional processing options
+        
+    Returns:
+        Result: Processing results
+        
+    Raises:
+        ValidationError: If data validation fails
+        ProcessingError: If processing fails
+        
+    Examples:
+        >>> result = process_data([1, 2, 3], batch_size=2)
+        >>> print(result)
+        [2, 4, 6]
+    """
+```
+
+### 4.2 Class Documentation
+- Document class purpose and usage
+- Include inheritance information
+- Document class-level attributes
+- Provide usage examples
+- Document class invariants
+
+## 5. Class Design Patterns
+
+### 5.1 Configuration Classes
+- Use `@dataclass` for configuration classes
+- Include validation methods
+- Support environment variable configuration
+- Provide default values
+- Implement configuration validation
+
+Example:
+```python
+@dataclass
+class Config:
+    host: str
+    port: int = 8080
+    timeout: int = 30
+    debug: bool = False
+    
+    def validate(self) -> None:
+        if not self.host:
+            raise ValidationError("Host cannot be empty")
+        if self.port <= 0:
+            raise ValidationError("Port must be positive")
+```
+
+### 5.2 Base Classes
+- Use ABC for abstract base classes
+- Define abstract methods with `@abstractmethod`
+- Provide common functionality in base class
+- Allow method overriding for testing
+- Use Protocol classes for structural typing
+
+## 6. Testing Patterns
+
+### 6.1 Test Organization
+- Use pytest for testing
+- Organize tests in classes matching implementation
+- Use fixtures for common setup
+- Mock external dependencies
+- Use test factories for complex objects
+
+### 6.2 Test Structure
+```python
+class TestProcessor:
+    @pytest.fixture
+    def processor(self):
+        """Fixture to create a Processor instance"""
+        return Processor(**TEST_CONFIG)
+
+    def test_init(self, processor):
+        """Test initialization of Processor"""
+        assert processor.config.host == TEST_CONFIG['host']
+```
+
+### 6.3 Testing Best Practices
+- Test both success and failure cases
+- Use parametrized tests for multiple scenarios
+- Mock external services and APIs
+- Test edge cases and error conditions
+- Use fixtures for common test setup
+- Implement property-based testing where appropriate
+
+## 7. Logging and Monitoring
+
+### 7.1 Logging Setup
+- Use a centralized logging setup
+- Include request IDs in logs
+- Use appropriate log levels
+- Format logs consistently
+- Implement structured logging
+
+Example:
+```python
+def setup_logging(name: str) -> logging.Logger:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s'
+    )
+```
+
+## 8. Code Style Guidelines
+
+### 8.1 General Rules
+- Follow PEP 8 style guide
+- Use meaningful variable names
+- Keep functions focused and small
+- Use type hints consistently
+- Document public interfaces
+- Use type checkers (mypy, pyright)
+
+### 8.2 Naming Conventions
+- Use PascalCase for classes
+- Use snake_case for functions and variables
+- Use UPPER_CASE for constants
+- Prefix private methods with underscore
+- Use descriptive names that reflect purpose
+
+## 9. Resource Management
+
+### 9.1 Context Managers
+- Implement `__enter__` and `__exit__` for resource management
+- Use context managers for connections and cursors
+- Ensure proper cleanup in `__exit__`
+- Handle exceptions in context managers
+
+Example:
+```python
+def __enter__(self) -> 'ResourceManager':
+    self.initialize()
+    return self
+
+def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    self.cleanup()
+```
+
+## 10. Best Practices
+
+### 10.1 Connection Management
+- Implement retry logic for transient failures
+- Use connection pooling where appropriate
+- Handle connection timeouts gracefully
+- Implement proper cleanup of resources
+- Use async/await for I/O operations
+
+### 10.2 Security
+- Never hardcode credentials
+- Use environment variables or secure credential storage
+- Implement proper access control
+- Use encryption for sensitive data
+- Follow security best practices
+
+### 10.3 Performance
+- Use connection pooling
+- Implement proper timeout handling
+- Use batch operations where possible
+- Implement proper error handling and retries
+- Profile and optimize critical paths
+
+## 11. Version Control Guidelines
+
+### 11.1 Commit Messages
+- Use clear and descriptive commit messages
+- Reference issue numbers when applicable
+- Keep commits focused and atomic
+- Follow conventional commit format
+- Write meaningful commit messages
+
+### 11.2 Branching Strategy
+- Use feature branches for new development
+- Keep main branch stable
+- Use pull requests for code review
+- Maintain clean git history
+- Follow GitFlow or similar workflow
+
+## 12. Deployment and Distribution
+
+### 12.1 Package Structure
+- Use proper Python package structure
+- Include necessary metadata files
+- Provide clear installation instructions
+- Include version information
+- Use modern packaging tools (poetry, hatch)
+
+### 12.2 Documentation
+- Maintain up-to-date README
+- Include usage examples
+- Document configuration options
+- Provide troubleshooting guide
+- Use Sphinx for API documentation
+
+## 13. Maintenance and Updates
+
+### 13.1 Code Review Process
+- Review for adherence to these guidelines
+- Check for proper error handling
+- Verify test coverage
+- Ensure documentation is updated
+- Use automated code quality tools
+
+### 13.2 Version Management
+- Follow semantic versioning
+- Maintain changelog
+- Document breaking changes
+- Provide migration guides when needed
+- Use version control tags 

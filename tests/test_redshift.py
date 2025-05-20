@@ -264,3 +264,34 @@ class TestRedConn:
         assert "Execution failed" in results[0]['error']
         mock_cursor.__enter__.assert_called()
         mock_cursor.__exit__.assert_called() 
+
+    def test_echo_property(self, red_conn):
+        """Test echo property functionality"""
+        red_conn.echo = True
+        assert red_conn.echo is True
+        
+        mock_conn = Mock()
+        with patch('aws_connector.redshift.redshift_connector.connect', return_value=mock_conn), \
+             patch('pandas.read_sql', return_value=pd.DataFrame()), \
+             patch('aws_connector.redshift.logger.info') as mock_logger:
+            red_conn.fetch("SELECT * FROM test_table", echo=True)
+            mock_logger.assert_called()
+
+    def test_connection_property(self, red_conn, mock_connection):
+        """Test connection property"""
+        red_conn.conn = mock_connection
+        assert red_conn.connection == mock_connection
+        
+        red_conn.conn = None
+        with pytest.raises(ConnectionError):
+            _ = red_conn.connection
+
+    def test_cursor_property(self, red_conn, mock_connection, mock_cursor):
+        """Test cursor property"""
+        red_conn.conn = mock_connection
+        mock_connection.cursor.return_value = mock_cursor
+        assert red_conn.cursor == mock_cursor
+        
+        red_conn.conn = None
+        with pytest.raises(ConnectionError):
+            _ = red_conn.cursor 

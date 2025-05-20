@@ -119,7 +119,7 @@ Contributions are welcome! Please read our contributing guidelines in the `docs/
 
 ## Documentation
 
-For detailed documentation, including configuration options and advanced usage examples, please visit our [documentation](docs/index.rst).
+For detailed documentation, including configuration options and advanced usage examples, please visit our [documentation](https://jmfelice.github.io/aws_connector/).
 
 ## License
 
