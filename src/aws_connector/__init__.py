@@ -9,25 +9,23 @@ __version__ = '0.1.0'
 
 from .redshift import RedConn, RedshiftConfig
 from .s3 import S3Connector
-from .aws_sso import AWSSSO
+from .aws_sso import AWSsso
 from .exceptions import (
     AWSConnectorError,
     RedshiftError,
     ConnectionError,
     QueryError,
-    S3Error,
-    SSOError
+    S3Error
 )
 
 __all__ = [
     'RedConn',
     'RedshiftConfig',
     'S3Connector',
-    'AWSSSO',
+    'AWSsso',
     'AWSConnectorError',
     'RedshiftError',
     'ConnectionError',
     'QueryError',
-    'S3Error',
-    'SSOError'
+    'S3Error'
 ]
