@@ -34,7 +34,7 @@ html_static_path = ['_static']
 
 # Theme options
 html_theme_options = {
-    'github_user': 'jaredfelice',  # Replace with your GitHub username
+    'github_user': 'jmfelice',  # Replace with your GitHub username
     'github_repo': 'aws_connector',  # Replace with your repository name
     'github_banner': True,
     'github_button': True,
