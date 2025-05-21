@@ -19,6 +19,8 @@ from .exceptions import (
     RedshiftError
 )
 from .utils import setup_logging
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 
 # Configure logging
 logger = setup_logging(__name__)
@@ -252,10 +254,10 @@ class S3Base(ABC):
         Args:
             local_path (str): The local file path to upload
             s3_path (str): The target path in S3
-            
+
         Returns:
             S3Result: Upload status information
-            
+
         Raises:
             FileNotFoundError: If the source file does not exist
             UploadError: If there's an error with the S3 operation
@@ -307,6 +309,7 @@ class S3Base(ABC):
         redshift_table_name: str,
         redshift_username: str,
         create_table_statement: Optional[str] = None,
+        truncate_table_statement: Optional[str] = None,
         echo: bool = False
     ) -> S3Result:
         """
@@ -318,6 +321,7 @@ class S3Base(ABC):
             redshift_table_name (str): The name of the target table in Redshift
             redshift_username (str): The Redshift user executing the statements
             create_table_statement (str, optional): SQL statement to create the target table
+            truncate_table_statement (str, optional): SQL statement to truncate the target table
             echo (bool): If True, print the COPY command that will be executed
             
         Returns:
@@ -351,6 +355,7 @@ class S3Base(ABC):
 
         sql_statements: List[str] = [
             create_table_statement,
+            truncate_table_statement,
             copy_command
         ]
 
@@ -631,6 +636,7 @@ class S3Connector(S3Base):
         redshift_table_name: str,
         redshift_username: str,
         create_table_statement: Optional[str] = None,
+        truncate_table_statement: Optional[str] = None,
         echo: bool = False
     ) -> S3Result:
         """
@@ -642,6 +648,7 @@ class S3Connector(S3Base):
             redshift_table_name (str): The name of the table in Redshift
             redshift_username (str): The username for Redshift connection
             create_table_statement (str, optional): SQL statement to create the target table
+            truncate_table_statement (str, optional): SQL statement to truncate the target table
             echo (bool): If True, print the COPY command that will be executed
             
         Returns:
@@ -657,7 +664,8 @@ class S3Connector(S3Base):
                 s3_file_path='data/2024/01/file.csv',
                 redshift_schema_name='your_schema',
                 redshift_table_name='your_table',
-                redshift_username='your_username'
+                redshift_username='your_username',
+                truncate_table_statement='TRUNCATE TABLE fisher_prod.your_schema.your_table;'
             )
         """
         # Ensure the file exists in S3
@@ -687,51 +695,175 @@ class S3Connector(S3Base):
             redshift_table_name=redshift_table_name,
             redshift_username=redshift_username,
             create_table_statement=create_table_statement,
+            truncate_table_statement=truncate_table_statement,
             echo=echo
         )
     
     def upload_to_redshift(
         self,
-        data: Union[str, pd.DataFrame],
+        data: Union[str, pd.DataFrame, List[Union[str, pd.DataFrame]]],
+        redshift_username: str,
+        redshift_schema_name: Union[str, List[str]],
+        redshift_table_name: Union[str, List[str]],
+        create_table_statement: Optional[Union[str, List[Optional[str]]]] = None,
+        truncate_table_statement: Optional[Union[str, List[Optional[str]]]] = None,
+        temp_file_name: Optional[Union[str, List[Optional[str]]]] = None,
+        echo: bool = False,
+        parallel: bool = False,
+        max_workers: int = 4
+    ) -> Union[S3Result, List[S3Result]]:
+        """
+        Upload data to Redshift via S3. Handles both single items and lists of items.
+        When given a list, can process items in parallel or sequentially.
+        
+        Args:
+            data: Either a single item (file path or DataFrame) or a list of items
+            redshift_username (str): The username for Redshift connection
+            redshift_schema_name: Either a single schema name or a list matching data length
+            redshift_table_name: Either a single table name or a list matching data length
+            create_table_statement: Optional SQL statement(s) to create table(s)
+            truncate_table_statement: Optional SQL statement(s) to truncate table(s)
+            temp_file_name: Optional name(s) for temporary file(s)
+            echo (bool): If True, print the COPY command that will be executed
+            parallel (bool): If True and data is a list, process items in parallel
+            max_workers (int): Maximum number of parallel workers when parallel=True
+            
+        Returns:
+            Union[S3Result, List[S3Result]]: Single result or list of results
+            
+        Raises:
+            ValueError: If list lengths don't match when using lists
+            TypeError: If the data type is not supported
+            FileNotFoundError: If any source file does not exist
+            UploadError: If there's an error with the S3 operation
+            RedshiftError: If there's an error with the Redshift operation
+            
+        Example:
+            # Upload a single DataFrame with truncate
+            df = pd.DataFrame({'col1': [1, 2, 3]})
+            result = s3.upload_to_redshift(
+                data=df,
+                redshift_schema_name='my_schema',
+                redshift_table_name='my_table',
+                redshift_username='my_user',
+                truncate_table_statement='TRUNCATE TABLE fisher_prod.my_schema.my_table;'
+            )
+            
+            # Upload multiple files with different truncate statements
+            files = ['file1.csv', 'file2.csv']
+            schemas = ['schema1', 'schema2']
+            tables = ['table1', 'table2']
+            truncate_stmts = [
+                'TRUNCATE TABLE fisher_prod.schema1.table1;',
+                'TRUNCATE TABLE fisher_prod.schema2.table2;'
+            ]
+            results = s3.upload_to_redshift(
+                data=files,
+                redshift_schema_name=schemas,
+                redshift_table_name=tables,
+                redshift_username='my_user',
+                truncate_table_statement=truncate_stmts,
+                parallel=True
+            )
+        """
+        # Convert single item to list for uniform processing
+        items = [data] if not isinstance(data, list) else data
+        
+        # Convert single schema/table names to lists if needed
+        schemas = [redshift_schema_name] if not isinstance(redshift_schema_name, list) else redshift_schema_name
+        tables = [redshift_table_name] if not isinstance(redshift_table_name, list) else redshift_table_name
+        
+        # Convert optional parameters to lists if needed
+        table_stmts = [create_table_statement] if not isinstance(create_table_statement, list) else create_table_statement
+        truncate_stmts = [truncate_table_statement] if not isinstance(truncate_table_statement, list) else truncate_table_statement
+        temp_files = [temp_file_name] if not isinstance(temp_file_name, list) else temp_file_name
+        
+        # Validate list lengths
+        if isinstance(data, list):
+            if len(schemas) != len(items):
+                raise ValueError(f"Number of schema names ({len(schemas)}) must match number of data items ({len(items)})")
+            if len(tables) != len(items):
+                raise ValueError(f"Number of table names ({len(tables)}) must match number of data items ({len(items)})")
+            if create_table_statement is not None and len(table_stmts) != len(items):
+                raise ValueError(f"Number of create table statements ({len(table_stmts)}) must match number of data items ({len(items)})")
+            if truncate_table_statement is not None and len(truncate_stmts) != len(items):
+                raise ValueError(f"Number of truncate table statements ({len(truncate_stmts)}) must match number of data items ({len(items)})")
+            if temp_file_name is not None and len(temp_files) != len(items):
+                raise ValueError(f"Number of temp file names ({len(temp_files)}) must match number of data items ({len(items)})")
+        
+        if parallel and len(items) > 1:
+            # Process items in parallel
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for i, item in enumerate(items):
+                    future = executor.submit(
+                        self._upload_single_to_redshift,
+                        item=item,
+                        redshift_schema_name=schemas[i],
+                        redshift_table_name=tables[i],
+                        redshift_username=redshift_username,
+                        create_table_statement=table_stmts[i],
+                        truncate_table_statement=truncate_stmts[i],
+                        temp_file_name=temp_files[i] if temp_file_name is not None else None,
+                        echo=echo
+                    )
+                    futures.append(future)
+                
+                # Collect results
+                results = []
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        results.append({
+                            'success': False,
+                            'message': '',
+                            'error': f"Error in parallel upload: {str(e)}"
+                        })
+                
+                return results if isinstance(data, list) else results[0]
+        else:
+            # Process items sequentially
+            results = []
+            for i, item in enumerate(items):
+                result = self._upload_single_to_redshift(
+                    item=item,
+                    redshift_schema_name=schemas[i],
+                    redshift_table_name=tables[i],
+                    redshift_username=redshift_username,
+                    create_table_statement=table_stmts[i],
+                    truncate_table_statement=truncate_stmts[i],
+                    temp_file_name=temp_files[i] if temp_file_name is not None else None,
+                    echo=echo
+                )
+                results.append(result)
+            
+            return results if isinstance(data, list) else results[0]
+
+    def _upload_single_to_redshift(
+        self,
+        item: Union[str, pd.DataFrame],
         redshift_schema_name: str,
         redshift_table_name: str,
         redshift_username: str,
-        create_table_statement: Optional[str] = None,
-        temp_file_name: Optional[str] = None,
-        echo: bool = False
+        create_table_statement: Optional[str],
+        truncate_table_statement: Optional[str],
+        temp_file_name: Optional[str],
+        echo: bool
     ) -> S3Result:
-        """
-        Upload data to Redshift via S3. Handles both files and DataFrames.
-        
-        Args:
-            data: Either a file path (str) or a pandas DataFrame
-            redshift_schema_name (str): The name of the schema in Redshift
-            redshift_table_name (str): The name of the table in Redshift
-            redshift_username (str): The username for Redshift connection
-            create_table_statement (str, optional): SQL statement to create the target table
-            temp_file_name (str, optional): Custom name for the temporary file (for DataFrame uploads)
-            echo (bool): If True, print the COPY command that will be executed
-            
-        Returns:
-            S3Result: Operation status information
-            
-        Raises:
-            TypeError: If the data type is not supported
-            FileNotFoundError: If the source file does not exist
-            UploadError: If there's an error with the S3 operation
-            RedshiftError: If there's an error with the Redshift operation
-        """
-        if isinstance(data, str):
+        """Helper method to upload a single item to Redshift."""
+        if isinstance(item, str):
             # For file uploads, just use the filename
-            source_file = os.path.basename(data)
+            source_file = os.path.basename(item)
             # First upload the file
-            upload_result = self.file_connector.upload_to_s3(data)
+            upload_result = self.file_connector.upload_to_s3(item)
             if not upload_result['success']:
                 return upload_result
         else:
-            # For DataFrame uploads, upload and get the filename
+            # For DataFrame uploads
             upload_result = self.df_connector.upload_to_s3(
-                df=data,
+                df=item,
                 table_name=redshift_table_name,
                 temp_file_name=temp_file_name
             )
@@ -746,5 +878,6 @@ class S3Connector(S3Base):
             redshift_table_name=redshift_table_name,
             redshift_username=redshift_username,
             create_table_statement=create_table_statement,
+            truncate_table_statement=truncate_table_statement,
             echo=echo
         ) 
