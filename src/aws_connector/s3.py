@@ -511,6 +511,80 @@ class S3Connector(S3Base):
     """
     Main S3 connector that combines file and DataFrame functionality.
     This class provides a unified interface for both file and DataFrame operations.
+    
+    Examples:
+        ```python
+        # Example 1: Using S3Config
+        from aws_connector.s3 import S3Config, S3Connector
+        
+        # Create config from environment variables
+        config = S3Config.from_env()
+        
+        # Initialize connector with config
+        s3 = S3Connector(
+            bucket=config.bucket,
+            directory=config.directory,
+            iam=config.iam,
+            region=config.region,
+            kms_key_id=config.kms_key_id
+        )
+        
+        # Upload a file to S3
+        result = s3.upload_to_s3("path/to/local/file.csv")
+        
+        # Upload a DataFrame to Redshift
+        import pandas as pd
+        df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+        result = s3.upload_to_redshift(
+            data=df,
+            redshift_schema_name='my_schema',
+            redshift_table_name='my_table',
+            redshift_username='my_user'
+        )
+        
+        # Example 2: Direct initialization without S3Config
+        s3 = S3Connector(
+            bucket='my-bucket',
+            directory='data/',
+            region='us-east-1',
+            iam='123456789012',
+            kms_key_id='arn:aws:kms:us-east-1:123456789012:key/abcd1234'
+        )
+        
+        # Load existing S3 file to Redshift
+        result = s3.load_from_s3_to_redshift(
+            s3_file_path='data/2024/01/file.csv',
+            redshift_schema_name='my_schema',
+            redshift_table_name='my_table',
+            redshift_username='my_user'
+        )
+
+        # Example 3: Using S3Config with additional parameters via **kwargs
+        config = S3Config(
+            bucket='my-bucket',
+            directory='data/',
+            region='us-east-1'
+        )
+        
+        # Initialize with config and override/add parameters
+        s3 = S3Connector(
+            **config.__dict__,  # Unpack config attributes
+            max_retries=5,      # Override default retries
+            timeout=60,         # Override default timeout
+            kms_key_id='arn:aws:kms:us-east-1:123456789012:key/abcd1234'  # Add KMS key
+        )
+        
+        # Upload DataFrame with custom temp file name
+        df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+        result = s3.upload_to_redshift(
+            data=df,
+            redshift_schema_name='my_schema',
+            redshift_table_name='my_table',
+            redshift_username='my_user',
+            temp_file_name='custom_upload.csv',  # Custom temp file name
+            echo=True  # Print COPY command
+        )
+        ```
     """
     
     def __init__(

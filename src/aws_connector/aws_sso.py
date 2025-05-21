@@ -1,11 +1,10 @@
 import subprocess
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime, timedelta
 import sqlite3
 from pathlib import Path
 from dataclasses import dataclass
 import os
-import uuid
 import time
 from .exceptions import (
     AWSConnectorError,
@@ -56,7 +55,7 @@ class SSOConfig:
     max_retries: int = 3
     retry_delay: int = 5
     
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         self.validate()
     
@@ -100,202 +99,238 @@ class AWSsso:
     A class to handle AWS SSO authentication and credential management.
     This class provides functionality to refresh AWS SSO credentials and track their validity.
     
-    Testing:
-        For testing purposes, you can override the following methods:
-        - _get_db_connection(): Override to return a mock database connection
-        - _run_aws_command(): Override to return mock AWS CLI output
+    Examples:
+        ```python
+        # Example 1: Using SSOConfig
+        from aws_connector.aws_sso import SSOConfig, AWSsso
         
-        Example:
-            ```python
-            class MockAWSsso(AWSsso):
-                def _run_aws_command(self):
-                    return MockCommandOutput()
-            ```
+        # Create config from environment variables
+        config = SSOConfig.from_env()
+        
+        # Initialize connector with config
+        sso = AWSsso(
+            aws_exec_file_path=config.aws_exec_file_path,
+            db_path=config.db_path,
+            refresh_window_hours=config.refresh_window_hours,
+            max_retries=config.max_retries,
+            retry_delay=config.retry_delay
+        )
+        
+        # Get credential expiration time
+        expiration = sso.get_expiration_time()
+        print(f"Credentials will expire at: {expiration}")
+        
+        # Example 2: Direct initialization without SSOConfig
+        sso = AWSsso(
+            aws_exec_file_path=r'C:\Program Files\Amazon\AWSCLIV2\aws.exe',
+            db_path=Path('./data/custom_credentials.db'),
+            refresh_window_hours=12,  # Refresh every 12 hours
+            max_retries=5,           # More retries
+            retry_delay=10           # Longer delay between retries
+        )
+        
+        # Ensure credentials are valid before AWS operations
+        try:
+            sso.ensure_valid_credentials()
+            # Proceed with AWS operations
+        except AuthenticationError as e:
+            print(f"Failed to authenticate: {e}")
+        
+        # Example 3: Using SSOConfig with parameter overrides
+        config = SSOConfig.from_env()
+        sso = AWSsso(
+            **config.__dict__,           # Unpack config attributes
+            refresh_window_hours=12,     # Override refresh window
+            max_retries=5,              # Override retries
+            retry_delay=10              # Override delay
+        )
+        
+        # Monitor credential status
+        last_refresh = sso.get_last_refresh_time()
+        if last_refresh:
+            time_since_refresh = datetime.now() - last_refresh
+            print(f"Time since last refresh: {time_since_refresh}")
+        ```
     """
     
-    def __init__(self, config: Optional[SSOConfig] = None):
+    def __init__(
+        self,
+        aws_exec_file_path: str = r'C:\Program Files\Amazon\AWSCLIV2\aws.exe',
+        db_path: Path = Path("./data/aws_credentials.db"),
+        refresh_window_hours: int = 6,
+        max_retries: int = 3,
+        retry_delay: int = 5
+    ):
         """
         Initialize the AWS SSO handler.
         
         Args:
-            config (Optional[SSOConfig]): Configuration for SSO authentication.
-                                        If None, uses default configuration.
+            aws_exec_file_path (str): Path to the AWS CLI executable
+            db_path (Path): Path to the credentials database
+            refresh_window_hours (int): Hours between credential refreshes
+            max_retries (int): Maximum number of authentication retries
+            retry_delay (int): Delay between retries in seconds
         
         Raises:
             ValueError: If configuration parameters are invalid
-            
-        Examples:
-            ```python
-            # Default configuration
-            sso = AWSsso()
-            
-            # Custom configuration
-            config = SSOConfig(refresh_window_hours=12)
-            sso = AWSsso(config)
-            ```
+            CredentialError: If there's an error initializing the database
         """
-        self.config = config or SSOConfig()
-        self._validate_config()
+        self.config = SSOConfig(
+            aws_exec_file_path=aws_exec_file_path,
+            db_path=db_path,
+            refresh_window_hours=refresh_window_hours,
+            max_retries=max_retries,
+            retry_delay=retry_delay
+        )
+        self._last_refresh_time: Optional[datetime] = None
+        self._expiration_time: Optional[datetime] = None
+        self._db_connection: Optional[sqlite3.Connection] = None
         self._init_db()
-    
-    def _validate_config(self) -> None:
-        """
-        Validate the configuration parameters.
-        
-        Raises:
-            ValueError: If any configuration parameters are invalid
-            
-        Examples:
-            ```python
-            config = SSOConfig(refresh_window_hours=-1)  # Invalid
-            try:
-                sso = AWSsso(config)  # Will raise ValueError
-            except ValueError as e:
-                print(f"Invalid configuration: {e}")
-            ```
-        """
-        if not self.config.aws_exec_file_path:
-            raise ValueError("AWS executable path cannot be empty")
-        if not self.config.db_path:
-            raise ValueError("Database path cannot be empty")
-        if self.config.refresh_window_hours <= 0:
-            raise ValueError("Refresh window must be a positive number")
-        if self.config.max_retries < 0:
-            raise ValueError("Max retries cannot be negative")
-        if self.config.retry_delay < 0:
-            raise ValueError("Retry delay cannot be negative")
     
     def _init_db(self) -> None:
         """
         Initialize the SQLite database for storing credential timestamps.
+        If the database exists and contains timestamps, initialize the cached timestamps.
         
         Raises:
-            sqlite3.Error: If there's an error creating the database or table
-            
-        Examples:
-            ```python
-            try:
-                sso = AWSsso()
-                # Database initialized successfully
-            except CredentialError as e:
-                print(f"Failed to initialize database: {e}")
-            ```
+            CredentialError: If there's an error creating the database or table
         """
         try:
-            self.config.db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.config.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS credential_timestamps (
-                    id INTEGER PRIMARY KEY,
-                    last_refresh TIMESTAMP NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            conn.commit()
-            conn.close()
-            logger.info(f"Initialized credential database at {self.config.db_path}")
-        except sqlite3.Error as e:
+            # First check if the parent directory exists
+            if not self.config.db_path.parent.exists():
+                try:
+                    self.config.db_path.parent.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    raise CredentialError(f"Error creating database directory: {str(e)}")
+
+            # Try to connect to the database
+            try:
+                conn = sqlite3.connect(self.config.db_path)
+            except sqlite3.Error as e:
+                raise CredentialError(f"Error connecting to database: {str(e)}")
+
+            try:
+                cursor = conn.cursor()
+                
+                # Create table if it doesn't exist
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS credential_timestamps (
+                        id INTEGER PRIMARY KEY,
+                        last_refresh TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+                
+                # If table exists, get the latest timestamp
+                cursor.execute('SELECT last_refresh FROM credential_timestamps ORDER BY id DESC LIMIT 1')
+                result = cursor.fetchone()
+                
+                if result:
+                    self._last_refresh_time = datetime.fromisoformat(result[0])
+                    self._expiration_time = self._last_refresh_time + timedelta(hours=self.config.refresh_window_hours)
+                    logger.info(f"Initialized timestamps from database. Last refresh: {self._last_refresh_time}")
+                else:
+                    logger.info("No existing timestamps found in database")
+                
+                logger.info(f"Initialized credential database at {self.config.db_path}")
+            except sqlite3.Error as e:
+                raise CredentialError(f"Error initializing database tables: {str(e)}")
+            finally:
+                conn.close()
+        except Exception as e:
             error_msg = f"Error initializing credential database: {str(e)}"
             logger.error(error_msg)
             raise CredentialError(error_msg)
     
-    def should_refresh_credentials(self) -> bool:
+    def __enter__(self) -> 'AWSsso':
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit - ensure database connection is closed."""
+        self._close_db_connection()
+    
+    def _get_db_connection(self) -> sqlite3.Connection:
+        """Get a database connection, creating one if it doesn't exist.
+        
+        Returns:
+            sqlite3.Connection: A database connection instance
+            
+        Raises:
+            CredentialError: If there's an error creating the connection
         """
-        Check if AWS SSO credentials need to be refreshed based on configured window.
+        if not self._db_connection:
+            try:
+                self._db_connection = sqlite3.connect(self.config.db_path)
+            except sqlite3.Error as e:
+                raise CredentialError(f"Error creating database connection: {str(e)}")
+        return self._db_connection
+    
+    def _close_db_connection(self) -> None:
+        """Close the database connection if it exists."""
+        if self._db_connection:
+            try:
+                self._db_connection.close()
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}")
+            finally:
+                self._db_connection = None
+    
+    @property
+    def should_refresh_credentials(self) -> bool:
+        """Check if credentials need to be refreshed.
         
         Returns:
             bool: True if credentials need to be refreshed, False otherwise
-            
-        Raises:
-            CredentialError: If there's an error checking credential status
-            
-        Examples:
-            ```python
-            sso = AWSsso()
-            
-            # Check if refresh is needed
-            if sso.should_refresh_credentials():
-                print("SSO credentials need refresh")
-                sso.refresh_credentials()
-            else:
-                print("SSO credentials are still valid")
-            ```
         """
-        try:
-            conn = sqlite3.connect(self.config.db_path)
-            cursor = conn.cursor()
-            cursor.execute('SELECT last_refresh FROM credential_timestamps ORDER BY id DESC LIMIT 1')
-            result = cursor.fetchone()
-            conn.close()
-            
-            if not result:
-                logger.info("No previous SSO credential refresh found")
-                return True
-                
-            last_refresh = datetime.fromisoformat(result[0])
-            needs_refresh = datetime.now() - last_refresh > timedelta(hours=self.config.refresh_window_hours)
-            
-            if needs_refresh:
-                logger.info(f"SSO credentials need refresh. Last refresh was {last_refresh}")
-            else:
-                logger.info(f"SSO credentials are still valid. Last refresh was {last_refresh}")
-                
-            return needs_refresh
-            
-        except Exception as e:
-            error_msg = f"Error checking SSO credential timestamp: {str(e)}"
-            logger.error(error_msg)
-            raise CredentialError(error_msg)
-    
-    def update_refresh_timestamp(self) -> bool:
-        """
-        Update the timestamp of the last SSO credential refresh.
-        
-        Returns:
-            bool: True if update was successful, False otherwise
-            
-        Raises:
-            CredentialError: If there's an error updating the timestamp
-            
-        Examples:
-            ```python
-            try:
-                if sso.update_refresh_timestamp():
-                    print("Successfully updated SSO refresh timestamp")
-                else:
-                    print("Failed to update SSO refresh timestamp")
-            except CredentialError as e:
-                print(f"Error updating timestamp: {e}")
-            ```
-        """
-        try:
-            conn = sqlite3.connect(self.config.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                'INSERT INTO credential_timestamps (last_refresh) VALUES (?)',
-                (datetime.now().isoformat(),)
-            )
-            conn.commit()
-            conn.close()
-            logger.info("Successfully updated SSO credential refresh timestamp")
+        if self._expiration_time is None:
             return True
-        except Exception as e:
-            error_msg = f"Error updating SSO credential timestamp: {str(e)}"
-            logger.error(error_msg)
-            raise CredentialError(error_msg)
+        return datetime.now() > self._expiration_time
     
-    def refresh_credentials(self) -> bool:
-        """
-        Refresh AWS SSO credentials using the AWS CLI.
+    def get_expiration_time(self) -> Optional[datetime]:
+        """Get the expiration time of the current credentials.
         
         Returns:
-            bool: True if refresh was successful, False otherwise
+            Optional[datetime]: The expiration time of the credentials, or None if not set
+        """
+        return self._expiration_time
+    
+    def get_last_refresh_time(self) -> Optional[datetime]:
+        """Get the last time the credentials were refreshed.
+        
+        Returns:
+            Optional[datetime]: The last refresh time, or None if not set
+        """
+        return self._last_refresh_time
+    
+    def ensure_valid_credentials(self) -> bool:
+        """Ensure that the AWS SSO credentials are valid.
+        If credentials are expired or about to expire, they will be refreshed.
+        
+        Returns:
+            bool: True if credentials are valid or were successfully refreshed
             
         Raises:
             AuthenticationError: If there's an error during SSO authentication
             CredentialError: If there's an error updating the timestamp
         """
+        if self.should_refresh_credentials:
+            return self.refresh_credentials()
+        return True
+
+    def refresh_credentials(self) -> bool:
+        """
+        Refresh AWS SSO credentials using the AWS CLI if they need refreshing.
+        
+        Returns:
+            bool: True if credentials are valid or were successfully refreshed, False otherwise
+            
+        Raises:
+            AuthenticationError: If there's an error during SSO authentication
+            CredentialError: If there's an error updating the timestamp
+        """
+        # Attempt to refresh credentials
         for attempt in range(self.config.max_retries):
             try:
                 result = subprocess.run(
@@ -307,7 +342,34 @@ class AWSsso:
                 )
                 if result.returncode == 0:
                     logger.info("Successfully authenticated with AWS SSO")
-                    return self.update_refresh_timestamp()
+                    # Update cached timestamps
+                    self._last_refresh_time = datetime.now()
+                    self._expiration_time = self._last_refresh_time + timedelta(hours=self.config.refresh_window_hours)
+                    
+                    # Update database with new timestamp
+                    try:
+                        conn = self._get_db_connection()
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                'INSERT INTO credential_timestamps (last_refresh) VALUES (?)',
+                                (self._last_refresh_time.isoformat(),)
+                            )
+                            conn.commit()
+                            logger.info("Successfully updated SSO credential refresh timestamp")
+                            return True
+                        except sqlite3.Error as e:
+                            error_msg = f"Error updating SSO credential timestamp: {str(e)}"
+                            logger.error(error_msg)
+                            raise CredentialError(error_msg)
+                        finally:
+                            conn.close()
+                            self._db_connection = None
+                    except Exception as e:
+                        error_msg = f"Error updating SSO credential timestamp: {str(e)}"
+                        logger.error(error_msg)
+                        raise CredentialError(error_msg)
+                        
                 if attempt < self.config.max_retries - 1:
                     logger.warning(f"SSO authentication attempt {attempt + 1} failed, retrying...")
                     time.sleep(self.config.retry_delay)
@@ -321,93 +383,5 @@ class AWSsso:
                 logger.error(error_msg)
                 raise AuthenticationError(error_msg)
         
-        # If we've exhausted all retries without success, raise AuthenticationError
         raise AuthenticationError(f"Failed to refresh SSO credentials after {self.config.max_retries} attempts")
-    
-    def ensure_valid_credentials(self) -> bool:
-        """
-        Ensures that AWS SSO credentials are valid by refreshing them if necessary.
-        
-        Returns:
-            bool: True if credentials are valid, False otherwise
-            
-        Raises:
-            AuthenticationError: If there's an error during SSO authentication
-            CredentialError: If there's an error managing credentials
-            
-        Examples:
-            ```python
-            # Basic usage
-            if sso.ensure_valid_credentials():
-                print("SSO credentials are valid")
-            else:
-                print("Failed to ensure valid SSO credentials")
-            
-            # With error handling
-            try:
-                sso.ensure_valid_credentials()
-                # Proceed with AWS operations
-            except (AuthenticationError, CredentialError) as e:
-                print(f"Error ensuring valid SSO credentials: {e}")
-            ```
-        """
-        if self.should_refresh_credentials():
-            return self.refresh_credentials()
-        return True
-
-    def _get_db_connection(self) -> sqlite3.Connection:
-        """
-        Get a connection to the SQLite database.
-        
-        Returns:
-            sqlite3.Connection: A connection to the database
-            
-        Raises:
-            CredentialError: If there's an error connecting to the database
-        """
-        try:
-            if not self.config.db_path.exists():
-                raise CredentialError(f"Database file does not exist: {self.config.db_path}")
-            return sqlite3.connect(self.config.db_path)
-        except sqlite3.Error as e:
-            error_msg = f"Error connecting to credential database: {str(e)}"
-            logger.error(error_msg)
-            raise CredentialError(error_msg)
-    
-    def _run_aws_command(self, command: List[str]) -> subprocess.CompletedProcess:
-        """Run an AWS CLI command. Override this method for testing.
-        
-        Args:
-            command (List[str]): The command to run
-            
-        Returns:
-            subprocess.CompletedProcess: The command execution result
-            
-        Raises:
-            AuthenticationError: If there's an error executing the command
-        """
-        try:
-            return subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-        except subprocess.CalledProcessError as e:
-            raise AuthenticationError(f"Error executing AWS command: {str(e)}")
-        except FileNotFoundError as e:
-            raise AuthenticationError(f"AWS CLI executable not found: {str(e)}")
-    
-    @property
-    def db_connection(self) -> sqlite3.Connection:
-        """Get the current database connection.
-        
-        Returns:
-            sqlite3.Connection: The current database connection
-            
-        Raises:
-            CredentialError: If there's an error connecting to the database
-        """
-        return self._get_db_connection()
 

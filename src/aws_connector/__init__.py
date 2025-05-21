@@ -8,8 +8,8 @@ __email__ = 'jmfelice@icloud.com'
 __version__ = '0.1.0'
 
 from .redshift import RedConn, RedshiftConfig
-from .s3 import S3Connector
-from .aws_sso import AWSsso
+from .s3 import S3Connector, S3Config
+from .aws_sso import AWSsso, SSOConfig
 from .exceptions import (
     AWSConnectorError,
     RedshiftError,
@@ -27,5 +27,7 @@ __all__ = [
     'RedshiftError',
     'ConnectionError',
     'QueryError',
-    'S3Error'
+    'S3Error',
+    'SSOConfig',
+    'S3Config'
 ]
