@@ -12,12 +12,13 @@ from .exceptions import (
     AWSConnectorError,
     RedshiftError,
     ConnectionError,
-    QueryError
+    QueryError,
+    CredentialError
 )
-from .utils import setup_logging
 
-# Configure logging
-logger = setup_logging(__name__)
+# Configure module logger
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 @dataclass
 class RedshiftConfig:

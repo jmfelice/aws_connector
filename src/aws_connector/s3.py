@@ -18,12 +18,12 @@ from .exceptions import (
     UploadError,
     RedshiftError
 )
-from .utils import setup_logging
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
 
-# Configure logging
-logger = setup_logging(__name__)
+# Configure module logger
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 @dataclass
 class S3Config:

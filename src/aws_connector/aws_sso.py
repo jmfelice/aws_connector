@@ -6,15 +6,18 @@ from pathlib import Path
 from dataclasses import dataclass
 import os
 import time
+import boto3
+from botocore.exceptions import ClientError
+import logging
 from .exceptions import (
     AWSConnectorError,
     CredentialError,
     AuthenticationError
 )
-from .utils import setup_logging
 
-# Configure logging
-logger = setup_logging(__name__)
+# Configure module logger
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 @dataclass
 class SSOConfig:
