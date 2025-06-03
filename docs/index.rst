@@ -13,11 +13,11 @@ The package is designed to be easy to use while providing robust error handling 
 Installation
 -----------
 
-You can install the package using pip:
+You can install the package directly from GitHub:
 
 .. code-block:: bash
 
-    pip install aws-connector
+    pip install git+https://github.com/your-org/aws-connector.git
 
 Quick Start
 ----------

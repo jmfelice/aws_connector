@@ -369,6 +369,7 @@ class RedConn:
                 with self.conn.cursor() as connection:
                     try:
                         connection.execute(statement)
+                        self.conn.commit()  # Explicitly commit the transaction
                         results.append({
                             "success": True, 
                             "statement": statement,
